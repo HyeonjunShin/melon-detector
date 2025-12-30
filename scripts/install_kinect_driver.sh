@@ -51,6 +51,7 @@ patch_header "tools/k4aviewer/k4amicrophonelistener.cpp" "#include <cstring>" 11
 # (기존에 요청하셨던 11번 라인 cstring은 7번 라인과 중복될 수 있어 7번 우선 적용)
 
 echo "--- 모든 소스 패치 완료 ---"
+sudo cp scripts/99-k4a.rules /etc/udev/rules.d/
 
 # 4. 최종 빌드 및 설치
 cd build
@@ -75,7 +76,9 @@ sudo cp usr/lib/x86_64-linux-gnu/libk4a1.4/libdepthengine.so.2.0 /usr/lib/x86_64
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libdepthengine.so.2.0 /usr/lib/x86_64-linux-gnu/libdepthengine.so.2
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libdepthengine.so.2 /usr/lib/x86_64-linux-gnu/libdepthengine.so
 
-pip install pyk4a --break-system-packages
+sudo apt install -y python3-pip
+sudo apt install -y libsoundio-dev
+pip3 install pyk4a --break-system-packages
 
 # 정리 및 라이브러리 갱신
 cd / && rm -rf $TEMP_DIR && rm -rf $REPO_DIR
