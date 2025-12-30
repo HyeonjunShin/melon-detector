@@ -1,0 +1,10 @@
+{
+    "python.analysis.extraPaths": [
+        "./src"
+    ],
+    "python.analysis.useLibraryCodeForTypes": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "cmake.sourceDirectory": "/home/hyeonjun/2_code/melon-detector/Azure-Kinect-Sensor-SDK/extern/imgui",
+    "ros.distro": "jazzy",
+    "cmake.ignoreCMakeListsMissing": true
+}

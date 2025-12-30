@@ -1,0 +1,27 @@
+{
+	"name": "Melon-detector",
+	"build": {"dockerfile": "Dockerfile", "context": ".."},
+	"runArgs": [
+		"-it",
+        "--privileged",
+        "--device=/dev/bus/usb:/dev/bus/usb",
+        "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
+        "-v", "${localEnv:HOME}/.Xauthority:/home/vscode/.Xauthority",
+        "-e", "DISPLAY=${localEnv:DISPLAY}"
+	],
+	"customizations": {
+        "vscode": {
+            "extensions": [
+				"ms-vscode.cmake-tools",
+                "ms-vscode.cpptools",
+                "ms-python.python",
+                "ms-iot.vscode-ros",
+                "as-cii.common-lisp-hyperspec",
+                "redhat.vscode-xml",
+				"codeium.codeium"
+            ]
+        }
+    },
+
+
+}

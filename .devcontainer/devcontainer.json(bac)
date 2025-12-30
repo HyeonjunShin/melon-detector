@@ -1,0 +1,48 @@
+{
+    "name": "ROS2 Jazzy: GPU + PyTorch + Camera",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "remoteUser": "vscode",
+    "runArgs": [
+		"-it",
+        "--gpus=all",
+		// "-e", "DISPLAY=host.docker.internal:0", // for mac host
+        // "--volume=/tmp/.X11-unix:/tmp/.X11-unix",
+        "--volume=/tmp/.X11-unix:/tmp/.X11-unix:rw",
+        "--network=host",
+        "--ipc=host",
+        // "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
+        "--privileged", 
+        "--group-add=video",
+        // "--group-add=dialout",
+        // "--device=/dev/ttyUSB0:/dev/ttyUSB0",
+        // "-v", "/dev/bus/usb:/dev/bus/usb"
+        // "-v", "/dev/snd:/dev/snd",
+        // "--device=/dev/video0:/dev/video0",
+        // "--device=/dev/video1:/dev/video1",
+        "--device=/dev/bus/usb:/dev/bus/usb",
+        "-v", "${localEnv:HOME}/.Xauthority:/home/vscode/.Xauthority",
+        "-e", "DISPLAY=${localEnv:DISPLAY}",
+    ],
+    // "containerEnv": {
+        // "DISPLAY": "${localEnv:DISPLAY}",
+        // "XDG_RUNTIME_DIR": "/tmp/runtime-vscode"
+    // },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.cpptools",
+                "ms-python.python",
+                "ms-iot.vscode-ros",
+                "as-cii.common-lisp-hyperspec",
+                "redhat.vscode-xml",
+				"codeium.codeium"
+            ],
+            // "settings": {
+                // "python.defaultInterpreterPath": "/usr/bin/python3"
+            // }
+        }
+    },
+    // "postCreateCommand": "sudo chown -R vscode /home/vscode"
+}
