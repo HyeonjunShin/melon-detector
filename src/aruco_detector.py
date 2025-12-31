@@ -55,9 +55,10 @@ class ArUcoDetector:
             gray = frame
 
         corners, ids, rejected = self.detector.detectMarkers(gray)
-
         if ids is not None:
             cv2.aruco.drawDetectedMarkers(frame, corners, ids)
-            for i in range(len(ids)):
-                _, rvec, tvec = cv2.solvePnP(self.obj_points, corners[i], self.K, self.C, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+            for id, corner in zip(ids, corners):
+                if id > 9:
+                    continue
+                _, rvec, tvec = cv2.solvePnP(self.obj_points, corner, self.K, self.C, flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 cv2.drawFrameAxes(frame, self.K, self.C, rvec, tvec, 0.03)

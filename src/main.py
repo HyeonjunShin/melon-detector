@@ -1,52 +1,25 @@
 from pyk4a import PyK4APlayback, CalibrationType
 import cv2
 import numpy as np
+from aruco_detector import ArUcoDetector
 
-marker_size = 0.025
-marker_margin = 0.013
-def get_x_aligned_corners(col_index):
-    x_start = col_index * marker_margin
-    # 좌상, 우상, 우하, 좌하 순서
-    return np.array([
-        [x_start,          marker_size, 0], 
-        [x_start + marker_size, marker_size, 0], 
-        [x_start + marker_size, 0,      0], 
-        [x_start,          0,      0]
-    ], dtype=np.float32)
 
 def main():
     playback = PyK4APlayback("./recored_files/1080p.mkv")
     playback.open()
 
-    K_img = playback.calibration.get_camera_matrix(CalibrationType.COLOR)
-    coff_img = playback.calibration.get_distortion_coefficients(CalibrationType.COLOR)
+    # The camera parameters
+    WIDTH = 1920
+    HEIGHT = 1080
+    K = playback.calibration.get_camera_matrix(CalibrationType.COLOR)
+    C = playback.calibration.get_distortion_coefficients(CalibrationType.COLOR)
 
-    print(K_img)
-    print(coff_img)
-
-    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-    parameters = cv2.aruco.DetectorParameters()
-    detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
-
-    obj_points = np.array([
-        [0, 0, 0],               # 좌상 (Corner 0)
-        [marker_size, 0, 0],   # 우상 (Corner 1)
-        [marker_size, -marker_size, 0], # 우하 (Corner 2)
-        [0, -marker_size, 0]   # 좌하 (Corner 3)
-    ], dtype=np.float32)
-
-    # marker_ids = np.array([0, 1, 2, 3, 4], dtype=np.int32)
-
-    # marker_points = [
-    #     get_x_aligned_corners(0), # ID 0
-    #     get_x_aligned_corners(1), # ID 1
-    #     get_x_aligned_corners(2),  # ID 2
-    #     get_x_aligned_corners(3),  # ID 2
-    #     get_x_aligned_corners(4)  # ID 2
-    # ]
-
-    # board = cv2.aruco.Board(marker_points, aruco_dict, marker_ids)
+    # Initalize the detectors
+    aruco_detector = ArUcoDetector(K, C, 0.025)
+    melon_detector = MelonDetector()
     
+    new_mtx, roi = cv2.getOptimalNewCameraMatrix(K, C, (WIDTH, HEIGHT), 0, (WIDTH, HEIGHT))
+    mapx, mapy = cv2.initUndistortRectifyMap(K, C, None, new_mtx, (WIDTH, HEIGHT), cv2.CV_32FC1)
 
     cv2.namedWindow("frame", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("frame", (1920, 1080))
@@ -65,14 +38,10 @@ def main():
             continue
         frame = cv2.imdecode(frame, cv2.IMREAD_COLOR)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+        frame = cv2.remap(frame, mapx, mapy, cv2.INTER_LINEAR)
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, rejected = detector.detectMarkers(gray)
-        if ids is not None:
-            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
-            for i in range(len(ids)):
-                _, rvec, tvec = cv2.solvePnP(obj_points, corners[i], K_img, coff_img)
-                cv2.drawFrameAxes(frame, K_img, coff_img, rvec, tvec, 0.03)
+        aruco_detector.detect(frame)
+
             #     cv2.drawFrameAxes(frame, K_image, coff_image, rvec, tvec, 0.03) 
             #     cv2.putText(frame, f"ID:{ids[i][0]}", tuple(corners[i][0][0].astype(int)), 
             #                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
