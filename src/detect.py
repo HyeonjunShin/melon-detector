@@ -1,4 +1,4 @@
-from camera import Camera
+from device.kinect_camera import Camera
 import cv2
 import numpy as np
 

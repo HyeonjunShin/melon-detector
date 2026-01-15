@@ -54,7 +54,7 @@ def main():
 
         cv2.imshow("frame", frame)
 
-        key = cv2.waitKeyEx(0)  
+        key = cv2.waitKeyEx(33)  
         if key == ord('q') or key == 27:
             break
         elif key == 65363:

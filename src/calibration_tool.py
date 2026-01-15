@@ -1,7 +1,7 @@
 import cv2
 import os
 import numpy as np
-from camera import Camera
+from device.kinect_camera import Camera
 
 def getChessboardCorners(gray, CHECKERBOARD):
     return cv2.findChessboardCorners(gray, CHECKERBOARD, cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_FAST_CHECK + cv2.CALIB_CB_NORMALIZE_IMAGE)

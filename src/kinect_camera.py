@@ -1,19 +1,47 @@
 from pyk4a import PyK4A, Config, ColorResolution, DepthMode, FPS, ImageFormat, CalibrationType, ColorControlCommand, ColorControlMode
 import cv2
 import numpy as np
+from data_types import Frame
+
+
+class FPSMeter:
+    def __init__(self) -> None:
+        self.prev_time = 0
+        self.fps = 0
+
+    def draw(self, frame):
+        curr_time = cv2.getTickCount()
+        diff_time = (curr_time - self.prev_time) / cv2.getTickFrequency()
+        if diff_time > 0:
+            self.fps = 1.0 / diff_time
+        self.prev_time = curr_time
+
+        cv2.putText(frame, f"FPS: {self.fps:.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 0, 255), 3)
+        return frame
+
 
 class Camera:
-    def __init__(self):
-        self.k4a = PyK4A(
-            Config(
-                color_resolution=ColorResolution.RES_1080P,
-                color_format=ImageFormat.COLOR_BGRA32,
-                depth_mode=DepthMode.WFOV_2X2BINNED,
-                synchronized_images_only=False,
-                camera_fps=FPS.FPS_30,
+    def __init__(self, is_modeling = False):
+        if is_modeling == True:
+            self.k4a = PyK4A(
+                Config(
+                    color_resolution=ColorResolution.RES_1080P,
+                    color_format=ImageFormat.COLOR_BGRA32,
+                    depth_mode=DepthMode.NFOV_UNBINNED,
+                    synchronized_images_only=True,
+                    camera_fps=FPS.FPS_15,
+                )
             )
-        )
-
+        else:
+            self.k4a = PyK4A(
+                Config(
+                    color_resolution=ColorResolution.RES_1080P,
+                    color_format=ImageFormat.COLOR_BGRA32,
+                    depth_mode=DepthMode.WFOV_2X2BINNED,
+                    synchronized_images_only=True,
+                    camera_fps=FPS.FPS_30,
+                )
+            )
 
         if self.k4a._config.color_resolution == ColorResolution.RES_720P:
             self.w = 1280
@@ -33,8 +61,12 @@ class Camera:
         self.k4a._set_color_control(ColorControlCommand.EXPOSURE_TIME_ABSOLUTE, 16670, ColorControlMode.MANUAL)
         self.k4a._set_color_control(ColorControlCommand.WHITEBALANCE, 4500, ColorControlMode.MANUAL)
         
-        self.K_image = self.k4a.calibration.get_camera_matrix(CalibrationType.COLOR)
-        self.coff_image = self.k4a.calibration.get_distortion_coefficients(CalibrationType.COLOR)
+        calibration = self.k4a.calibration
+        
+        self.K_image = calibration.get_camera_matrix(CalibrationType.COLOR)
+        self.coff_image = calibration.get_distortion_coefficients(CalibrationType.COLOR)
+        
+        calibration.get_extrinsic_parameters(CalibrationType.COLOR, CalibrationType.DEPTH)
 
         self.new_mtx, roi = cv2.getOptimalNewCameraMatrix(self.K_image, self.coff_image, (self.w, self.h), 0, (self.w, self.h))
         self.mapx, self.mapy = cv2.initUndistortRectifyMap(self.K_image, self.coff_image, None, self.new_mtx, (self.w, self.h), cv2.CV_32FC1)
@@ -96,19 +128,34 @@ class Camera:
         print(self.getGain())
         return self.k4a._set_color_control(ColorControlCommand.GAIN, value, ColorControlMode.MANUAL)
 
-
     def stop(self):
         self.k4a.stop()
         print("Stop the Kinect camera.")
     
     def getFrame(self):
-        frame = self.k4a.get_capture().color
-        if frame is None:
+        capture = self.k4a.get_capture()
+
+        image = capture.color
+        depth = capture.transformed_depth
+        if image is None or depth is None:
             return None
+        timestamp_image = capture.color_timestamp_usec
         
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-        frame = cv2.remap(frame, self.mapx, self.mapy, cv2.INTER_LINEAR)
-        return frame
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+        image = cv2.remap(image, self.mapx, self.mapy, cv2.INTER_LINEAR)
+
+        # depth = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        # depth = cv2.applyColorMap(depth, cv2.COLORMAP_JET)
+
+        # alpha = 0.5  # 원본 컬러 이미지의 불투명도 (60%)
+        # beta = 0.5  # Depth 맵의 불투명도 (40%)
+        
+        # overlay_result = cv2.addWeighted(
+            # frame, alpha, 
+            # depth, beta, 
+            # 0)
+        # cv2.imshow("depth", overlay_result)
+        return Frame(image, depth, timestamp_image)
 
 clicked_points = []
 width, height = 800, 800
@@ -127,6 +174,7 @@ def mouse_callback(event, x, y, flags, param):
 if __name__ == "__main__":
     camera = Camera()
     camera.start()
+    fps_meter = FPSMeter()
     # CHECKERBOARD = (5, 7)
 
     cv2.namedWindow("window", cv2.WINDOW_NORMAL)
@@ -134,12 +182,15 @@ if __name__ == "__main__":
     cv2.setMouseCallback("window", mouse_callback)
     while True:
         frame = camera.getFrame()
+        
         if frame is None:
             continue
 
         for p in clicked_points:
-                cv2.circle(frame, tuple(p), 5, (0, 0, 255), -1)
-        cv2.imshow("window", frame)
+            cv2.circle(frame.image, tuple(p), 5, (0, 0, 255), -1)
+        fps_meter.draw(frame.image)
+        cv2.imshow("window", frame.image)
+
 
         key = cv2.waitKey(1) & 0xFF
         # 4점을 다 찍고 Enter를 누르면 투영 변환 실행
@@ -148,7 +199,7 @@ if __name__ == "__main__":
             # 변환 행렬 계산
             matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
             # 원근 변환 적용
-            warped = cv2.warpPerspective(frame, matrix, (width, height))
+            warped = cv2.warpPerspective(frame.image, matrix, (width, height))
             
             cv2.imshow("Real-time Warped", warped)
                 
