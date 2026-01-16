@@ -91,7 +91,8 @@ def detect_melon(frame, debug_frame=None):
     kernel = np.ones((3, 3), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+    
+    mask = cv2.resize(mask, None, fx=4, fy=4, interpolation=cv2.INTER_NEAREST)
     if not contours:
         return None
 
@@ -126,7 +127,7 @@ def detect_melon(frame, debug_frame=None):
         # cv2.putText(debug_frame, f"{final_angle:.0f} deg", (real_cx - 40, real_cy - 40),
         #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-    return (cx, cy, tx, ty)
+    return (cx, cy, tx, ty, mask)
     # [각도 계산 보정]
     # dx = real_tx - real_cx
     # dy = real_ty - real_cy

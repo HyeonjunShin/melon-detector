@@ -51,7 +51,7 @@ class Playback:
             if capture.color is not None and capture.depth is not None:
                 break
         
-        self.frame = Frame(capture.color, capture.depth, capture.color_timestamp_usec)
+        self.frame = Frame(capture.color, capture.transformed_depth, capture.color_timestamp_usec)
 
     def getFrame(self):
         # # depth = capture.depth
@@ -66,14 +66,14 @@ class Playback:
             capture = self.playback.get_next_capture()
             if capture.color is not None and capture.depth is not None:
                 break
-        self.frame = Frame(capture.color, capture.depth, capture.color_timestamp_usec)
+        self.frame = Frame(capture.color, capture.transformed_depth, capture.color_timestamp_usec)
     
     def prev(self):
         while True:
             capture = self.playback.get_previous_capture()
             if capture.color is not None and capture.depth is not None:
                 break
-        self.frame = Frame(capture.color, capture.depth, capture.color_timestamp_usec)
+        self.frame = Frame(capture.color, capture.transformed_depth, capture.color_timestamp_usec)
     
     def getImageAt(self, idx):
         self.playback.seek(self.timestamps_image[idx])

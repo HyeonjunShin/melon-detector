@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 from data_types import Frame
 
-
 class FPSMeter:
     def __init__(self) -> None:
         self.prev_time = 0
@@ -58,18 +57,18 @@ class Camera:
             print(f"Error: {e}")
             return
         
-        self.k4a._set_color_control(ColorControlCommand.EXPOSURE_TIME_ABSOLUTE, 16670, ColorControlMode.MANUAL)
+        self.k4a._set_color_control(ColorControlCommand.EXPOSURE_TIME_ABSOLUTE, 8330, ColorControlMode.MANUAL)
         self.k4a._set_color_control(ColorControlCommand.WHITEBALANCE, 4500, ColorControlMode.MANUAL)
-        
+        self.k4a._set_color_control(ColorControlCommand.GAIN, 50, ColorControlMode.MANUAL)
         calibration = self.k4a.calibration
         
-        self.K_image = calibration.get_camera_matrix(CalibrationType.COLOR)
-        self.coff_image = calibration.get_distortion_coefficients(CalibrationType.COLOR)
+        self.K = calibration.get_camera_matrix(CalibrationType.COLOR)
+        self.D = calibration.get_distortion_coefficients(CalibrationType.COLOR)
         
         calibration.get_extrinsic_parameters(CalibrationType.COLOR, CalibrationType.DEPTH)
 
-        self.new_mtx, roi = cv2.getOptimalNewCameraMatrix(self.K_image, self.coff_image, (self.w, self.h), 0, (self.w, self.h))
-        self.mapx, self.mapy = cv2.initUndistortRectifyMap(self.K_image, self.coff_image, None, self.new_mtx, (self.w, self.h), cv2.CV_32FC1)
+        self.new_mtx, roi = cv2.getOptimalNewCameraMatrix(self.K, self.D, (self.w, self.h), 0, (self.w, self.h))
+        self.mapx, self.mapy = cv2.initUndistortRectifyMap(self.K, self.D, None, self.new_mtx, (self.w, self.h), cv2.CV_32FC1)
 
         for target in ColorControlCommand:
             print(target, self.k4a._get_color_control(target))

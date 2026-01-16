@@ -10,8 +10,6 @@ class Calibration:
         self.min_distance = 100 # px
         self.save_dir = "output/"
         
-
-
     def start(self):
         last_pos = 0
         saved_count = 0
