@@ -1,0 +1,11 @@
+[tool.ruff]
+# 규칙 설정 (기본적으로 E, F, I, UP, N 등을 추천)
+select = ["E", "F", "I", "UP", "N"]
+ignore = []
+line-length = 100
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+ignore = ["N812"]

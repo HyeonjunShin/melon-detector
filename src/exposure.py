@@ -79,7 +79,7 @@ fourcc = cv2.VideoWriter_fourcc(*'XVID')
 
 # 2. 제어용 윈도우 및 트랙바 생성
 cv2.namedWindow('Control Panel', cv2.WINDOW_NORMAL)
-cv2.resizeWindow('Control Panel', 3840//2, 2160//2)
+cv2.resizeWindow('Control Panel', 3840//4, 2160//4)
 
 # 카메라 하드웨어 제어 트랙바 (기본값은 카메라마다 다를 수 있음)
 cv2.createTrackbar('Focus', 'Control Panel', 0, 255, nothing)     # 초점

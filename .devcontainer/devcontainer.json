@@ -4,10 +4,14 @@
 	"runArgs": [
 		"-it",
         "--privileged",
+        "--gpus", "all",
         "--device=/dev/bus/usb:/dev/bus/usb",
         "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
         "-v", "${localEnv:HOME}/.Xauthority:/home/vscode/.Xauthority",
-        "-e", "DISPLAY=${localEnv:DISPLAY}"
+        "-e", "DISPLAY=${localEnv:DISPLAY}",
+        "--device=/dev/video0",
+        "--device=/dev/video1",
+        "--device=/dev/bus/usb"
 	],
 	"customizations": {
         "vscode": {
@@ -18,10 +22,14 @@
                 "ms-iot.vscode-ros",
                 "as-cii.common-lisp-hyperspec",
                 "redhat.vscode-xml",
-				"codeium.codeium"
+				"google.geminicodeassist"
             ]
         }
     },
+    "remoteEnv": {
+        "PYTHONPATH": "${containerWorkspaceFolder}/src",
+        "PROJECT_ROOT": "${containerWorkspaceFolder}"
+  }
 
 
 }
