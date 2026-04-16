@@ -35,12 +35,12 @@ import torchvision.models as models
 class DepthToNormal(nn.Module):
     def __init__(self):
         super().__init__()
-        kernel_x = torch.tensor(
-            [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32
-        ).view(1, 1, 3, 3)
-        kernel_y = torch.tensor(
-            [[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32
-        ).view(1, 1, 3, 3)
+        kernel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(
+            1, 1, 3, 3
+        )
+        kernel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(
+            1, 1, 3, 3
+        )
         self.register_buffer("kernel_x", kernel_x)
         self.register_buffer("kernel_y", kernel_y)
 
@@ -98,12 +98,8 @@ class BackboneWithFPN(nn.Module):
         self.lat_c4 = nn.Conv2d(chennals[2], fpn_out_channels, kernel_size=1)
         self.lat_c3 = nn.Conv2d(chennals[1], fpn_out_channels, kernel_size=1)
 
-        self.smooth_p4 = nn.Conv2d(
-            fpn_out_channels, fpn_out_channels, kernel_size=3, padding=1
-        )
-        self.smooth_p3 = nn.Conv2d(
-            fpn_out_channels, fpn_out_channels, kernel_size=3, padding=1
-        )
+        self.smooth_p4 = nn.Conv2d(fpn_out_channels, fpn_out_channels, kernel_size=3, padding=1)
+        self.smooth_p3 = nn.Conv2d(fpn_out_channels, fpn_out_channels, kernel_size=3, padding=1)
 
     def forward(self, x):
         x = self.stem(x)
@@ -134,14 +130,10 @@ class Protonet(nn.Module):
     def __init__(self, in_channels=256, num_prototypes=32):
         super().__init__()
         coordconv_channels = 2
-        self.conv1 = nn.Conv2d(
-            in_channels + coordconv_channels, 256, kernel_size=3, padding=1
-        )
+        self.conv1 = nn.Conv2d(in_channels + coordconv_channels, 256, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
 
-        self.upsample = nn.Upsample(
-            scale_factor=2, mode="bilinear", align_corners=False
-        )
+        self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
         self.conv_out = nn.Conv2d(256, num_prototypes, kernel_size=1)
         self.relu = nn.ReLU(inplace=True)
 
