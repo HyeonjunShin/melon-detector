@@ -1,125 +1,129 @@
-import os
 import numpy as np
 import torch
-import cv2
-import json
-from torch.utils.data import Dataset, DataLoader
-from torchvision.transforms import functional as F
-from torchvision.ops import masks_to_boxes, box_convert
-from torchvision.utils import draw_bounding_boxes
+from torch.utils.data import DataLoader, Dataset
+from torchvision.io import ImageReadMode, read_image
+from torchvision.ops import masks_to_boxes
+
+
+def get_color_path(x):
+    return f"/home/hyeonjun/Downloads/isaac-sim-standalone-5.1.0-linux-x86_64/_train_dataset/rgb_{x:04d}.png"  # noqa: E501
+
+
+def get_mask_path(x):
+    return f"/home/hyeonjun/Downloads/isaac-sim-standalone-5.1.0-linux-x86_64/_train_dataset/instance_segmentation_{x:04d}.png"  # noqa: E501
+
+
+def get_src_and_dest(filenames):
+    src = set()
+    for filename in filenames:
+        segmentation = read_image(filename, mode=ImageReadMode.UNCHANGED).numpy()
+        segmentation[segmentation == 1] = 0 # To remote the object for except the other objects.
+        src.update(np.unique(segmentation).tolist())
+    src = np.array(sorted(list(set(src))))
+    dest = np.arange(len(src))
+    return src, dest
 
 class MelonDataset(Dataset):
-    def __init__(self, dir_path: str, img_size = (640,640), transform=None) -> None:
-        def key_fn(x):
-            return int(x.split("_")[1].split(".")[0])
-
-        self.dir_path = dir_path
-        self.all_files = os.listdir(self.dir_path)
-        self.color_files = [file for file in self.all_files if "rgb" in file]
-        self.mask_files = [file for file in self.all_files if "segmentation" in file]
-        self.json_files = [file for file in self.all_files if "labels" in file]
-
-        self.color_files = sorted(self.color_files, key=key_fn)
-        self.mask_files = sorted(self.mask_files, key=key_fn)
-        self.json_files = sorted(self.json_files, key=key_fn)
-
-        self.color_files = [os.path.join(self.dir_path, file) for file in self.color_files]
-        self.mask_files = [os.path.join(self.dir_path, file) for file in self.mask_files]
-        self.json_files = [os.path.join(self.dir_path, file) for file in self.json_files]
-
-        self.img_size = img_size
+    def __init__(
+        self, num_frames=10000, num_seq=10, target_image_size=(256, 448), transform=None
+    ) -> None:
+        self.num_frames = num_frames
+        self.num_seq = num_seq
+        self.num_data = num_frames // num_seq
+        self.h, self.w = target_image_size
         self.transform = transform
-        
+
     def __len__(self):
-        return len(self.color_files)
-    
+        return self.num_data
+
     def __getitem__(self, index: int):
-        img_path = self.color_files[index]
-        image = cv2.imread(img_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image = cv2.resize(image, self.img_size)
-        image = F.to_tensor(image)
-            
-        mask_path = self.mask_files[index]
-        mask = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
-        mask = cv2.resize(mask, self.img_size, interpolation=cv2.INTER_NEAREST)
+        start_idx = index * self.num_seq
+        end_idx = (index + 1) * self.num_seq
 
-        ids = np.unique(mask)
-        ids = ids[ids!=0]
-        num_objs = len(ids)
+        color_files = [get_color_path(i) for i in range(start_idx, end_idx)]
+        mask_files = [get_mask_path(i) for i in range(start_idx, end_idx)]
+        src, dest = get_src_and_dest(mask_files)
 
-        if num_objs == 0:
-            target = {
-                'labels': torch.zeros((0,), dtype=torch.int64),
-                'boxes': torch.zeros((0, 4), dtype=torch.float32),
-                'masks': torch.zeros((0, self.img_size[0], self.img_size[1]), dtype=torch.float32)
-            }
-            return image, target
-        masks = (mask == ids[:, None, None]).astype(np.float32)
-        masks = torch.as_tensor(masks, dtype=torch.int64)
+        colors = []
+        targets = []
+        for color_file, mask_file in zip(color_files, mask_files):
+            color = read_image(color_file, mode=ImageReadMode.RGB)
+            mask = read_image(mask_file, mode=ImageReadMode.UNCHANGED)
+            new_mask = np.zeros_like(mask)
+            for s, d in zip(src, dest):
+                new_mask[mask == s] = d
 
-        boxes = masks_to_boxes(masks)
-        h, w = self.img_size
-        cx = ((boxes[:, 0] + boxes[:, 2]) / 2) / w
-        cy = ((boxes[:, 1] + boxes[:, 3]) / 2) / h
-        bw = (boxes[:, 2] - boxes[:, 0]) / w
-        bh = (boxes[:, 3] - boxes[:, 1]) / h
-        boxes_cxcywh = torch.stack([cx, cy, bw, bh], dim=1)
+            ids = np.unique(new_mask)
+            ids = ids[ids != 0]
+            num_objs = len(ids)
 
-        labels = torch.zeros((num_objs,), dtype=torch.int64)
-        
-        target = {
-            'labels': labels,
-            'boxes': boxes_cxcywh,
-            'masks': masks
-        }
+            if num_objs == 0:
+                target = {
+                    "labels": torch.zeros((0,), dtype=torch.int64),
+                    "boxes": torch.zeros((0, 4), dtype=torch.float32),
+                    "masks": torch.zeros(
+                        (0, self.h, self.w),
+                        dtype=torch.float32,
+                    ),
+                }
+                colors.append(color)
+                targets.append(target)
+                continue
 
-        return image, target
-    
-        # from torchvision.transforms.functional import to_pil_image, pil_to_tensor
-        # ret = draw_bounding_boxes(img, boxes)
-        # img_pil = F.to_pil_image(ret)
-        # img_pil.show()  # 기본 이미지 뷰어로 열기
-    
+            new_masks = (new_mask == ids[:, None, None]).astype(np.float32)
+            new_masks = torch.as_tensor(new_masks, dtype=torch.int64)
+
+            boxes = masks_to_boxes(new_masks)
+            cx = ((boxes[:, 0] + boxes[:, 2]) / 2) / self.w
+            cy = ((boxes[:, 1] + boxes[:, 3]) / 2) / self.h
+            bw = (boxes[:, 2] - boxes[:, 0]) / self.w
+            bh = (boxes[:, 3] - boxes[:, 1]) / self.h
+            boxes_cxcywh = torch.stack([cx, cy, bw, bh], dim=1)
+
+            labels = torch.zeros((num_objs,), dtype=torch.int64)
+            target = {"labels": labels, "boxes": boxes_cxcywh, "masks": new_masks}
+            colors.append(color)
+            targets.append(target)
+        colors = torch.stack(colors, dim=0)
+        return colors, targets
+
+
 def custom_collate_fn(batch):
     images = []
     targets = []
-    
+
     for img, tgt in batch:
         images.append(img)
         targets.append(tgt)
-        
+
     images = torch.stack(images, dim=0)
-    
+
     return images, targets
 
-if __name__ == "__main__":
-    train_dataset = MelonDataset("/home/hyeonjun/Desktop/melon_dataset-v3")
-    train_laoder = DataLoader(train_dataset, batch_size=4, shuffle=True, collate_fn=custom_collate_fn)
 
+if __name__ == "__main__":
+    train_dataset = MelonDataset()
+    train_laoder = DataLoader(
+        train_dataset, batch_size=4, shuffle=True, collate_fn=custom_collate_fn
+    )
 
     # img, target = train_dataset[0]
     for batch_imgs, batch_targets in train_laoder:
-        print(f"배치 이미지 Shape: {batch_imgs.shape}") # [8, 3, 640, 640]
-        print(f"첫 번째 이미지의 라벨 수: {len(batch_targets[0]['labels'])}")
-        print(f"첫 번째 이미지의 마스크 Shape: {batch_targets[0]['masks'].shape}") # [N, 640, 640]
-        break # 한 배치만 확인하고 종료
+        print()
+        # print(f"배치 이미지 Shape: {batch_imgs.shape}")  # [8, 3, 640, 640]
+        # print(f"첫 번째 이미지의 라벨 수: {len(batch_targets[0]['labels'])}")
+        # print(f"첫 번째 이미지의 마스크 Shape: {batch_targets[0]['masks'].shape}")  # [N, 640, 640]
+        break  # 한 배치만 확인하고 종료
 
-
-
-    
     # label = json.load(open(json_files[0]))
 
-
-
     # cv2.imshow("img", img)
-    
-    # for instance_mask in instance_masks:
-        # target_idx = mask == melons[i]
-        # target_idx = target_idx.astype(np.uint8) * 255
-        # cv2.imshow("mask", instance_mask)
-        # cv2.waitKey(0)
 
+    # for instance_mask in instance_masks:
+    # target_idx = mask == melons[i]
+    # target_idx = target_idx.astype(np.uint8) * 255
+    # cv2.imshow("mask", instance_mask)
+    # cv2.waitKey(0)
 
     # print(target_idx!=0)
     # print(np.sum(target_idx==0))
@@ -129,5 +133,5 @@ if __name__ == "__main__":
     # print(mask.shape)
 
     # cv2.imshow("img", img)
-    
+
     # target_idx = cv2.cvtColor(target_idx, cv2.COLOR_GRAY2BGR)

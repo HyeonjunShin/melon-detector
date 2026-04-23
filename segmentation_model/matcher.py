@@ -17,7 +17,7 @@ class SimpleHungarianMatcher:
         target_boxes: [N, 4] (cxcywh)
         """
         # --- [추가] 예외 처리: 정답 객체가 없으면 바로 빈 텐서 반환 ---
-        num_queries = pred_logits.shape[0]
+        num_queries = pred_logits.shape[0] 
         num_gts = target_boxes.shape[0]
         if num_gts == 0:
             return torch.empty(0, dtype=torch.int64), torch.empty(0, dtype=torch.int64)

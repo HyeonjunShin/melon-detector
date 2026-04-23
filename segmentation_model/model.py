@@ -3,59 +3,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 
-# class OnlineTemporalShift(nn.Module):
-#     def __init__(self, channels, n_div=8):
-#         super().__init__()
-#         self.n_div = n_div
-#         self.fold = channels // n_div
-#         self.register_buffer("buffer", torch.zeros(1, self.fold, 1, 1))
 
-#     def forward(self, x):
-#         if not self.training:
-
-#             b, c, h, w = x.shape
-
-#             if self.buffer.shape[0] != b or self.buffer.shape[2] != h:
-#                 self.buffer = torch.zeros(
-#                     b, self.fold, h, w, device=x.device, dtype=x.dtype
-#                 )
-
-#             out = x.clone()
-#             out[:, : self.fold, :, :] = self.buffer
-
-#             self.buffer = x[:, : self.fold, :, :].detach()
-#             return out
-#         else:
-#             return x
-
-#     def reset_buffer(self):
-#         self.buffer.zero_()
-
-
-class DepthToNormal(nn.Module):
-    def __init__(self):
+class TemporalShift(nn.Module):
+    def __init__(self, n_segment=10, n_div=8):
         super().__init__()
-        kernel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(
-            1, 1, 3, 3
-        )
-        kernel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(
-            1, 1, 3, 3
-        )
-        self.register_buffer("kernel_x", kernel_x)
-        self.register_buffer("kernel_y", kernel_y)
+        self.n_segment = n_segment
+        self.n_div = n_div
 
-    def forward(self, depth, fx, fy):
-        dz_dx = F.conv2d(depth, self.kernel_x, padding=1)
-        dz_dy = F.conv2d(depth, self.kernel_y, padding=1)
+    def forward(self, x):
+        bt, c, h, w = x.size()
+        t = self.n_segment
+        b = bt // t
 
-        # Normal_x = -dz/dx * fx, Normal_y = -dz/dy * fy, Normal_z = depth
-        nx = -dz_dx * fx
-        ny = -dz_dy * fy
-        nz = depth
+        x = x.view(b, t, c, h, w).contiguous()
+        fold = c // self.n_div
 
-        normal = torch.cat([nx, ny, nz], dim=1)
-        norm = torch.norm(normal, p=2, dim=1, keepdim=True)
-        return normal / (norm + 1e-6)
+        out = torch.zeros_like(x)
+        out[:, :-1, :fold] = x[:, 1:, :fold]
+        out[:, 1:, fold : 2 * fold] = x[:, :-1, fold : 2 * fold]
+        out[:, :, 2 * fold :] = x[:, :, 2 * fold :]
+
+        return out.view(bt, c, h, w).contiguous()
 
 
 def get_out_channels(resnet, input_size=(1, 3, 224, 224)):
@@ -73,7 +41,7 @@ def get_out_channels(resnet, input_size=(1, 3, 224, 224)):
 
 
 class BackboneWithFPN(nn.Module):
-    def __init__(self, fpn_out_channels=256):
+    def __init__(self, fpn_out_channels=256, n_segment=10):
         super().__init__()
 
         resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
@@ -81,19 +49,11 @@ class BackboneWithFPN(nn.Module):
 
         self.stem = nn.Sequential(resnet.conv1, resnet.bn1, resnet.relu, resnet.maxpool)
 
-        self.layer1 = resnet.layer1
-        self.layer2 = resnet.layer2
-        self.layer3 = resnet.layer3
-        self.layer4 = resnet.layer4
+        self.layer1 = nn.Sequential(TemporalShift(n_segment), resnet.layer1)
+        self.layer2 = nn.Sequential(TemporalShift(n_segment), resnet.layer2)
+        self.layer3 = nn.Sequential(TemporalShift(n_segment), resnet.layer3)
+        self.layer4 = nn.Sequential(TemporalShift(n_segment), resnet.layer4)
 
-        # self.layer1 = nn.Sequential(OnlineTemporalShift(256), resnet.layer1)
-        # self.layer2 = nn.Sequential(OnlineTemporalShift(512), resnet.layer2)
-        # self.layer3 = nn.Sequential(OnlineTemporalShift(1024), resnet.layer3)
-        # self.layer4 = nn.Sequential(OnlineTemporalShift(2048), resnet.layer4)
-
-        # ---------------------------------------------------------
-        # 2. FPN (Feature Pyramid Network)
-        # ---------------------------------------------------------
         self.lat_c5 = nn.Conv2d(chennals[3], fpn_out_channels, kernel_size=1)
         self.lat_c4 = nn.Conv2d(chennals[2], fpn_out_channels, kernel_size=1)
         self.lat_c3 = nn.Conv2d(chennals[1], fpn_out_channels, kernel_size=1)
@@ -265,10 +225,10 @@ class PredictionHead(nn.Module):
 
 
 class FastMelonSegmenter(nn.Module):
-    def __init__(self, num_classes=1, num_prototypes=32):
+    def __init__(self, num_classes=1, num_prototypes=32, n_segment=10):
         super().__init__()
         # 1. 특징 추출기 (ResNet50 + FPN)
-        self.backbone = BackboneWithFPN(fpn_out_channels=256)
+        self.backbone = BackboneWithFPN(fpn_out_channels=256, n_segment=n_segment)
 
         # 2. 32장의 베이스 마스크 생성기
         self.protonet = Protonet(in_channels=256, num_prototypes=num_prototypes)
@@ -279,6 +239,15 @@ class FastMelonSegmenter(nn.Module):
         )
 
     def forward(self, images):
+        if images.dim() == 5:
+            b, t, c, h, w = images.shape
+            # TSM 처리를 위해 [B*T, C, H, W] 형태로 Flatten
+            images = images.view(b * t, c, h, w)
+        else:
+            # 단일 이미지 입력 시 예외 처리 (T=1로 간주)
+            bt, c, h, w = images.shape
+            b, t = bt, 1
+
         # 1. Backbone 통과
         p3, p4, p5 = self.backbone(images)
 
@@ -294,32 +263,31 @@ class FastMelonSegmenter(nn.Module):
         return pred_logits, pred_boxes, pred_coeffs, prototypes
 
 
-# --- 작동 테스트 ---
 if __name__ == "__main__":
-    dummy_input = torch.randn(2, 3, 256, 448)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"--- 현재 사용 중인 장치: {device} ---")
 
+    # 설정: 배치 2, 프레임 5, RGB 3, 256x448 해상도
+    batch_size = 2
+    num_frames = 5
+    dummy_video = torch.randn(batch_size, num_frames, 3, 256, 448).to(device)
+
+    # 모델 생성 (프레임 수 전달)
+    model = FastMelonSegmenter(n_segment=num_frames).to(device)
+
+    # 추론
+    logits, boxes, coeffs, protos = model(dummy_video)
+
+    print("--- TSM 적용 모델 최종 출력 형태 ---")
+    print(f"입력 데이터 형태     : {dummy_video.shape} [B, T, C, H, W]")
+    # 256x448 입력 시 앵커 개수는 2352개 (32x56 + 16x28 + 8x14)
+    print(f"Logits (클래스 확률) : {logits.shape}  [B*T, 2352, 1]")
+    print(f"Boxes (바운딩 박스)  : {boxes.shape}  [B*T, 2352, 4]")
+    print(f"Coeffs (마스크 계수) : {coeffs.shape}  [B*T, 2352, 32]")
+    # 프로토타입은 P3(32x56)의 2배 해상도인 64x112
+    print(f"Prototypes (특수물감): {protos.shape} [B*T, 32, 64, 112]")
+
+    # 요약 출력
     from torchinfo import summary
 
-    resnet = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
-    # print(resnet)
-    model = FastMelonSegmenter()
-    summary(model, input_size=(1, 3, 256, 448))
-
-    # logits, boxes, coeffs, protos = model(dummy_input)
-
-    # print("--- 모델 최종 출력 형태 ---")
-    # print(f"Logits (클래스 확률) : {logits.shape}")   # [2, 8400, 1]
-    # print(f"Boxes (바운딩 박스)  : {boxes.shape}")    # [2, 8400, 4]
-    # print(f"Coeffs (마스크 계수) : {coeffs.shape}")   # [2, 8400, 32]
-    # print(f"Prototypes (특수물감): {protos.shape}")  # [2, 32, 160, 160]
-
-# if __name__ == "__main__":
-#     # 배치 사이즈 2, RGB 채널 3, 이미지 크기 640x640 더미 데이터
-#     dummy_image = torch.randn(2, 3, 640, 640)
-
-#     backbone_fpn = BackboneWithFPN(fpn_out_channels=256)
-#     p3, p4, p5 = backbone_fpn(dummy_image)
-
-#     print(f"P3 Shape (1/8 해상도) : {p3.shape}") # [2, 256, 80, 80]
-#     print(f"P4 Shape (1/16 해상도): {p4.shape}") # [2, 256, 40, 40]
-#     print(f"P5 Shape (1/32 해상도): {p5.shape}") # [2, 256, 20, 20]
+    summary(model, input_size=(batch_size, num_frames, 3, 256, 448), device=device)
