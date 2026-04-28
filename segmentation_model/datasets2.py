@@ -24,12 +24,8 @@ def resize_with_letterbox(color_img, depth_map, K, target_size=(448, 256)):
     new_w, new_h = int(src_w * scale), int(src_h * scale)
 
     # 2. 이미지 리사이즈
-    resized_color = cv2.resize(
-        color_img, (new_w, new_h), interpolation=cv2.INTER_LINEAR
-    )
-    resized_depth = cv2.resize(
-        depth_map, (new_w, new_h), interpolation=cv2.INTER_NEAREST
-    )
+    resized_color = cv2.resize(color_img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    resized_depth = cv2.resize(depth_map, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
 
     # 3. Padding 계산 (중앙 정렬)
     pad_w = (tar_w - new_w) // 2
@@ -55,12 +51,12 @@ def resize_with_letterbox(color_img, depth_map, K, target_size=(448, 256)):
 class DepthToNormal(nn.Module):
     def __init__(self):
         super().__init__()
-        kernel_x = torch.tensor(
-            [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32
-        ).view(1, 1, 3, 3)
-        kernel_y = torch.tensor(
-            [[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32
-        ).view(1, 1, 3, 3)
+        kernel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(
+            1, 1, 3, 3
+        )
+        kernel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(
+            1, 1, 3, 3
+        )
         self.register_buffer("kernel_x", kernel_x)
         self.register_buffer("kernel_y", kernel_y)
 
@@ -128,22 +124,15 @@ class MelonDataset(Dataset):
         with open(txt_path) as f:
             file_numbers = [line.strip() for line in f.readlines()]
 
-        self.color_filenames = [
-            os.path.join(dir_path, f"rgb_{num}.png") for num in file_numbers
-        ]
+        self.color_filenames = [os.path.join(dir_path, f"rgb_{num}.png") for num in file_numbers]
         self.mask_filenames = [
-            os.path.join(dir_path, f"instance_segmentation_{num}.png")
-            for num in file_numbers
+            os.path.join(dir_path, f"instance_segmentation_{num}.png") for num in file_numbers
         ]
-        self.depth_filenames = [
-            os.path.join(dir_path, f"depth_{num}.npy") for num in file_numbers
-        ]
+        self.depth_filenames = [os.path.join(dir_path, f"depth_{num}.npy") for num in file_numbers]
 
         self.color_transforms = v2.Compose(
             [
-                v2.Resize(
-                    self.target_img_size, interpolation=v2.InterpolationMode.BILINEAR
-                ),
+                v2.Resize(self.target_img_size, interpolation=v2.InterpolationMode.BILINEAR),
                 v2.RandomApply(
                     [
                         v2.ColorJitter(
@@ -165,18 +154,14 @@ class MelonDataset(Dataset):
                 v2.ToImage(),
                 ClampDepth(min_depth=0.2, max_depth=2.2),
                 AddNoise(max_depth=2.2, noise_std=0.005, missing_prob=0.02),
-                v2.Resize(
-                    self.target_img_size, interpolation=v2.InterpolationMode.NEAREST
-                ),
+                v2.Resize(self.target_img_size, interpolation=v2.InterpolationMode.NEAREST),
                 v2.ToDtype(torch.float32, scale=False),
             ]
         )
 
         self.mask_transforms = v2.Compose(
             [
-                v2.Resize(
-                    self.target_img_size, interpolation=v2.InterpolationMode.NEAREST
-                ),
+                v2.Resize(self.target_img_size, interpolation=v2.InterpolationMode.NEAREST),
                 v2.ToDtype(torch.float32, scale=False),
             ]
         )
@@ -200,7 +185,6 @@ class MelonDataset(Dataset):
 
         mask = read_image(self.mask_filenames[index], ImageReadMode.UNCHANGED)
         mask = self.mask_transforms(mask)
-
 
         ids = torch.unique(mask)
         ids = ids[ids != 0]
@@ -273,8 +257,6 @@ if __name__ == "__main__":
         print(f"배치 이미지 Shape: {color.shape}")  # [8, 3, 640, 640]
         print(f"배치 깊이 맵 Shape: {depth.shape}")  # [8, 1, 640, 640]
         print(f"첫 번째 이미지의 라벨 수: {len(batch_targets[0]['labels'])}")
-        print(
-            f"첫 번째 이미지의 마스크 Shape: {batch_targets[0]['masks'].shape}"
-        )  # [N, 640, 640]
+        print(f"첫 번째 이미지의 마스크 Shape: {batch_targets[0]['masks'].shape}")  # [N, 640, 640]
         # break # 한 배치만 확인하고 종료
         print()

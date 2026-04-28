@@ -12,6 +12,8 @@ class TemporalShift(nn.Module):
 
     def forward(self, x):
         bt, c, h, w = x.size()
+        if bt == 1:
+            return x
         t = self.n_segment
         b = bt // t
 
@@ -44,7 +46,8 @@ class BackboneWithFPN(nn.Module):
     def __init__(self, fpn_out_channels=256, n_segment=10):
         super().__init__()
 
-        resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        # resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         chennals = get_out_channels(resnet)
 
         self.stem = nn.Sequential(resnet.conv1, resnet.bn1, resnet.relu, resnet.maxpool)
@@ -291,3 +294,6 @@ if __name__ == "__main__":
     from torchinfo import summary
 
     summary(model, input_size=(batch_size, num_frames, 3, 256, 448), device=device)
+
+    model.load_state_dict(torch.load("segmentation_model/checkpoints/best_model.pth")["model"])
+    model.eval()

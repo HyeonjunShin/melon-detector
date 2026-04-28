@@ -1,5 +1,4 @@
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
 from torchvision.io import ImageReadMode, read_image
 
@@ -30,15 +29,15 @@ def visualize_sequence(batch_imgs, batch_idx=0):
 
 def main():
     get_color_path = lambda x: (
-        f"/home/hyeonjun/Downloads/isaac-sim-standalone-5.1.0-linux-x86_64/_train_dataset/rgb_{x:04d}.png"
+        f"/home/hyeonjun/Downloads/isaac-sim-standalone-5.1.0-linux-x86_64/_train_dataset/rgb_{x:05d}.png"
     )
     get_segmentation_path = lambda x: (
-        f"/home/hyeonjun/Downloads/isaac-sim-standalone-5.1.0-linux-x86_64/_train_dataset/instance_segmentation_{x:04d}.png"
+        f"/home/hyeonjun/Downloads/isaac-sim-standalone-5.1.0-linux-x86_64/_train_dataset/instance_segmentation_{x:05d}.png"
     )
     # color = read_image(get_color_path(0), mode=ImageReadMode.RGB)
 
+    random_idx = 0
     while True:
-        random_idx = np.random.randint(0, 100)
         s = random_idx * 10
         e = (random_idx + 1) * 10
         print(s, e)
@@ -46,6 +45,7 @@ def main():
         colors = torch.stack(colors, dim=0)
         print(colors.shape)
         visualize_sequence(colors)
+        random_idx += 10 
 
 
 if __name__ == "__main__":

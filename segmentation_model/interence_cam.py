@@ -1,168 +1,163 @@
+from collections import deque
+
 import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-# 가상의 임포트 (사용자 환경에 맞게 유지)
+# 사용자 정의 모듈 (환경에 맞춰 경로 확인)
 from camera_devices.kinect_wrapper import KinectCamera
 from model import FastMelonSegmenter
-from torchvision.ops import nms  # 중복 박스 제거용
+from scipy.optimize import linear_sum_assignment
+from torchvision.ops import nms
 from torchvision.transforms import v2
 
 
 # ==========================================
-# 1. 트래킹 및 지터링 방지 로직
+# 1. 개별 객체 상태 관리 클래스 (안정성 강화)
 # ==========================================
-class TrackedObject:
-    def __init__(self, id, center, mask, score, alpha=0.2):
-        self.id = id
-        self.center = np.array(center, dtype=float)
-        self.mask = mask
-        self.score = score
-        self.alpha = alpha  # 낮을수록 더 부드러움 (0.1 ~ 0.3 권장)
-        self.missing_frames = 0
-        self.hit_stretch = 0  # 연속 탐지 횟수
+class TrackedMelon:
+    def __init__(self, melon_id, pos, norm, mask, pixel_pos, buffer_size=10):
+        self.id = melon_id
+        self.lost_count = 0
+        self.dt = 0.1  # 예상 프레임 간격
 
-    def update(self, new_center, new_mask, new_score):
-        # 지수 이동 평균(EMA)으로 중심점 좌표의 떨림(Jitter) 잡기
-        self.center = self.alpha * np.array(new_center) + (1 - self.alpha) * self.center
-        self.mask = new_mask
-        self.score = new_score
-        self.missing_frames = 0
-        self.hit_stretch += 1
+        # 데이터 안정화 버퍼
+        self.pos_history = deque([pos], maxlen=buffer_size)
+        self.norm_history = deque([norm], maxlen=buffer_size)
+
+        # 🔥 깜빡임 방지 핵심: 마지막 유효 시각 정보 저장
+        self.last_mask = mask
+        self.last_pixel_pos = pixel_pos  # (cX, cY)
+
+        # 상태 변수 (위치, 속도)
+        self.kf_pos = pos.copy()
+        self.kf_vel = np.zeros(3)
+
+    def predict(self):
+        """관성 기반 위치 예측"""
+        return self.kf_pos + self.kf_vel * self.dt
+
+    def update(self, pos, norm, mask, pixel_pos):
+        """새로운 측정값으로 업데이트"""
+        # 속도 추정 및 스무딩 (0.9 가중치로 급격한 변화 억제)
+        new_vel = (pos - self.kf_pos) / self.dt
+        self.kf_vel = 0.9 * self.kf_vel + 0.1 * new_vel
+        self.kf_pos = pos
+
+        self.pos_history.append(pos)
+        self.norm_history.append(norm)
+
+        # 시각 정보 갱신
+        self.last_mask = mask
+        self.last_pixel_pos = pixel_pos
+        self.lost_count = 0
+
+    def get_stable_state(self):
+        """안정화된 데이터 반환"""
+        avg_pos = np.mean(list(self.pos_history), axis=0)
+        avg_norm = np.mean(list(self.norm_history), axis=0)
+
+        norm_val = np.linalg.norm(avg_norm)
+        if norm_val > 0:
+            avg_norm /= norm_val
+        return avg_pos, avg_norm
 
 
-class MelonTracker:
-    def __init__(self, dist_threshold=100):
-        self.objects = []
+# ==========================================
+# 2. 월드 모델 매니저 (Global Manager)
+# ==========================================
+class WorldModelManager:
+    def __init__(self, dist_threshold=0.15, max_lost=50):
+        self.tracks = []
         self.next_id = 0
-        self.dist_threshold = dist_threshold  # 동일 객체로 판단할 최대 거리(픽셀)
+        self.dist_threshold = dist_threshold  # 15cm 매칭 임계값
+        self.max_lost = max_lost  # 가려져도 50프레임(약 1.5초) 유지
 
-    def step(self, detections):
-        if not detections:
-            for obj in self.objects:
-                obj.missing_frames += 1
-            self.objects = [obj for obj in self.objects if obj.missing_frames < 5]
-            return self.objects
+    def update(self, current_detections):
+        """
+        current_detections: [(pos, norm, pixel_coord, mask), ...]
+        """
+        num_tracks = len(self.tracks)
+        num_dets = len(current_detections)
 
-        current_centers = [d[0] for d in detections]
-        current_masks = [d[1] for d in detections]
-        current_scores = [d[2] for d in detections]
+        # 1. 기존 객체 예측 위치
+        preds = [t.predict() for t in self.tracks]
 
-        matched_indices = set()
+        matched_track_indices = set()
+        matched_det_indices = set()
 
-        # 1. 기존 추적 대상과 현재 탐지 결과 매칭
-        for obj in self.objects:
-            if not current_centers:
-                break
+        if num_tracks > 0 and num_dets > 0:
+            # 2. 헝가리안 매칭용 Cost Matrix
+            cost_matrix = np.zeros((num_tracks, num_dets))
+            for i in range(num_tracks):
+                for j in range(num_dets):
+                    cost_matrix[i, j] = np.linalg.norm(preds[i] - current_detections[j][0])
 
-            # 유클리드 거리 기반 최단 거리 찾기
-            distances = [np.linalg.norm(obj.center - np.array(c)) for c in current_centers]
-            if not distances:
-                continue
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-            min_idx = np.argmin(distances)
+            for t_idx, d_idx in zip(row_ind, col_ind):
+                if cost_matrix[t_idx, d_idx] < self.dist_threshold:
+                    d = current_detections[d_idx]
+                    self.tracks[t_idx].update(d[0], d[1], d[3], d[2])
+                    matched_track_indices.add(t_idx)
+                    matched_det_indices.add(d_idx)
 
-            if distances[min_idx] < self.dist_threshold and min_idx not in matched_indices:
-                obj.update(
-                    current_centers[min_idx],
-                    current_masks[min_idx],
-                    current_scores[min_idx],
-                )
-                matched_indices.add(min_idx)
-            else:
-                obj.missing_frames += 1
+        # 3. 매칭 실패 기존 트랙: 관성 이동 및 Lost 증가
+        for i, track in enumerate(self.tracks):
+            if i not in matched_track_indices:
+                track.lost_count += 1
+                track.kf_pos = preds[i]
 
-        # 2. 매칭되지 않은 새로운 탐지 결과에 새 ID 부여
-        for i, (center, mask, score) in enumerate(
-            zip(current_centers, current_masks, current_scores)
-        ):
-            if i not in matched_indices:
-                # 이미 추적 중인 객체와 너무 가까우면 중복으로 간주하고 버림
-                is_duplicate = any(
-                    np.linalg.norm(np.array(center) - o.center) < 50 for o in self.objects
-                )
-                if not is_duplicate:
-                    self.objects.append(TrackedObject(self.next_id, center, mask, score))
-                    self.next_id += 1
+        # 4. 새로운 탐지: 신규 등록
+        for j in range(num_dets):
+            if j not in matched_det_indices:
+                d = current_detections[j]
+                self.tracks.append(TrackedMelon(self.next_id, d[0], d[1], d[3], d[2]))
+                self.next_id += 1
 
-        # 3. 화면에서 사라진 지 오래된 객체 제거
-        self.objects = [obj for obj in self.objects if obj.missing_frames < 10]
-        return self.objects
+        # 5. 수명 초과 제거
+        self.tracks = [t for t in self.tracks if t.lost_count < self.max_lost]
+        return self.tracks
 
 
 # ==========================================
-# 2. 모델 추론 클래스 (NMS 포함)
+# 3. 유틸리티 함수
 # ==========================================
-class Estimator:
-    def __init__(
-        self,
-        model,
-        check_point,
-        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-    ):
-        self.device = device
-        self.model = model.to(self.device)
-        self.model.load_state_dict(torch.load(check_point, map_location=self.device))
-        self.model.eval()
+def compute_physical_normal(depth_map, cx, cy, fx, fy, k=15):
+    h, w = depth_map.shape
+    x_min, x_max = max(0, cx - k), min(w - 1, cx + k)
+    y_min, y_max = max(0, cy - k), min(h - 1, cy + k)
 
-    @torch.no_grad()
-    def get_prediction(self, input_tensor, orig_size=(1080, 1920)):
-        # 모델 포워드 패스
-        logits, boxes, coeffs, prototypes = self.model(input_tensor)
+    z_center = float(depth_map[cy, cx]) / 1000.0
+    if z_center <= 0:
+        return np.array([0, 0, 1.0])
 
-        # 1. 스코어 필터링
-        scores = logits.sigmoid()[0, :, 0]
-        conf_threshold = 0.4
-        mask_idx = scores > conf_threshold
+    dz = (float(depth_map[cy, x_max]) - float(depth_map[cy, x_min])) / 1000.0
+    dx = (x_max - x_min) * z_center / fx
+    dw = (float(depth_map[y_max, cx]) - float(depth_map[y_min, cx])) / 1000.0
+    dy = (y_max - y_min) * z_center / fy
 
-        if not mask_idx.any():
-            return None
-
-        valid_scores = scores[mask_idx]
-        valid_boxes = boxes[0, mask_idx]
-        valid_coeffs = coeffs[0, mask_idx]
-
-        # 2. [핵심] 중복 탐지 제거를 위한 NMS 적용
-        # 같은 참외에 여러 박스가 생기는 것을 방지 (IoU 0.3 이상 겹치면 낮은 점수 삭제)
-        keep_nms = nms(valid_boxes, valid_scores, iou_threshold=0.3)
-
-        valid_scores = valid_scores[keep_nms]
-        valid_coeffs = valid_coeffs[keep_nms]
-        # valid_boxes = valid_boxes[keep_nms] # 필요한 경우 박스도 리턴 가능
-
-        # 3. 마스크 조립 및 리사이즈
-        pred_masks = torch.einsum("nc,chw->nhw", valid_coeffs, prototypes[0]).sigmoid()
-        pred_masks = F.interpolate(
-            pred_masks.unsqueeze(1),
-            size=orig_size,
-            mode="bilinear",
-            align_corners=False,
-        ).squeeze(1)
-        binary_masks = (pred_masks > 0.5).cpu().numpy().astype(np.uint8)
-
-        # 결과 정리 (중심점 계산 포함)
-        results = []
-        for i in range(len(valid_scores)):
-            M = cv2.moments(binary_masks[i])
-            if M["m00"] != 0:
-                cX = int(M["m10"] / M["m00"])
-                cY = int(M["m01"] / M["m00"])
-                results.append(((cX, cY), binary_masks[i], valid_scores[i].item()))
-
-        return results
+    normal = np.array([-dz / dx if dx != 0 else 0, -dw / dy if dy != 0 else 0, 1.0])
+    norm = np.linalg.norm(normal)
+    return normal / norm if norm > 0 else np.array([0, 0, 1.0])
 
 
 # ==========================================
-# 3. 메인 실행 루프
+# 4. 메인 실행 루프
 # ==========================================
 if __name__ == "__main__":
-    check_point_path = "./melon_segmenter_epoch_200.pth"
-    target_img_size = (256, 448)  # 모델 학습 규격에 맞게 수정
+    check_point_path = "segmentation_model/checkpoints/best_model.pth"
+    target_img_size = (256, 448)
+    device = torch.device("cuda")
 
-    # 모델 및 트래커 초기화
-    estimator = Estimator(FastMelonSegmenter(num_classes=1, num_prototypes=32), check_point_path)
-    tracker = MelonTracker(dist_threshold=120)  # 컨베이어 속도에 따라 조절
+    # 모델 초기화 (에폭 180 기반)
+    model = FastMelonSegmenter(num_classes=1, num_prototypes=32, n_segment=1).to(device)
+    model.load_state_dict(torch.load(check_point_path)["model"])
+    model.eval()
+
+    # 월드 모델 초기화
+    world_model = WorldModelManager(dist_threshold=0.15, max_lost=50)
 
     color_transforms = v2.Compose(
         [
@@ -174,10 +169,11 @@ if __name__ == "__main__":
 
     camera = KinectCamera()
     camera.start()
+    K, D = camera.K, camera.D
+    fx, fy = K[0, 0], K[1, 1]
 
-    K = camera.K
-    D = camera.D
-    T = np.array(
+    # Camera to World Matrix (m 단위)
+    T_world = np.array(
         [
             [-0.99995885, -0.00566316, 0.00708717, -0.13613424],
             [-0.0085511, 0.84927882, -0.52787533, 1.26736509],
@@ -186,83 +182,84 @@ if __name__ == "__main__":
         ]
     )
 
-    cv2.namedWindow("Stable Melon Tracking")
-    save_count = 0
-
     while True:
         frame = camera.get_frame()
         if frame is None:
             continue
-
-        color, depth, timestamp = frame
+        color, depth, _ = frame
         h, w = color.shape[:2]
 
-        # 1. 딥러닝 추론 (NMS로 중복 마스크 1차 제거)
-        input_tensor = color_transforms(color).unsqueeze(0).to(estimator.device)
-        detections = estimator.get_prediction(input_tensor, orig_size=(h, w))
+        # 1. AI 추론 및 후처리
+        img_t = color_transforms(color).unsqueeze(0).to(device)
+        with torch.no_grad():
+            logits, boxes, coeffs, protos = model(img_t)
 
-        # 2. 트래커 실행 (프레임 간 ID 연결 및 좌표 스무딩)
-        tracked_melons = tracker.step(detections if detections else [])
+        scores = logits.sigmoid()[0, :, 0]
+        mask_idx = scores > 0.4  # 낮은 임계값으로 인식 유지력 강화
 
-        # 3. 시각화 (RGB -> BGR 주의)
-        vis_img = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
+        current_frame_dets = []
+        if mask_idx.any():
+            v_scores, v_boxes, v_coeffs = scores[mask_idx], boxes[0, mask_idx], coeffs[0, mask_idx]
+            keep = nms(v_boxes, v_scores, 0.3)
 
-        for obj in tracked_melons:
-            # 부드럽게 계산된 중심점 좌표
-            cZ = depth[int(obj.center[1]), int(obj.center[0])]
-            cX, cY = int(obj.center[0]), int(obj.center[1])
-
-            p_normal = cv2.undistortPoints(np.array([[[cX, cY]]], dtype=np.float32), K, D)
-            u_n = p_normal[0][0][0]
-            v_n = p_normal[0][0][1]
-            X_c = u_n * cZ
-            Y_c = v_n * cZ
-            Z_c = cZ
-
-            P_c = np.array([X_c, Y_c, Z_c, 1.0])
-            P_w = T @ P_c
-            print(
-                cX,
-                cY,
-                cZ,
-                X_c,
-                Y_c,
-                Z_c,
+            # 마스크 조립 (한 번에 수행)
+            all_masks = torch.einsum("nc,chw->nhw", v_coeffs[keep], protos[0]).sigmoid()
+            all_masks = F.interpolate(all_masks.unsqueeze(1), size=(h, w), mode="bilinear").squeeze(
+                1
             )
-            print(P_w)
-            # ID별 고정 색상 부여
-            np.random.seed(obj.id)
-            color_val = np.random.randint(0, 255, (3,)).tolist()
+            binary_masks = (all_masks > 0.5).cpu().numpy().astype(np.uint8)
 
-            # 마스크 씌우기
-            mask_indices = obj.mask == 1
-            vis_img[mask_indices] = (
-                vis_img[mask_indices] * 0.6 + np.array(color_val) * 0.4
+            for i, idx in enumerate(keep):
+                M = cv2.moments(binary_masks[i])
+                if M["m00"] == 0:
+                    continue
+                cx, cy = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
+
+                z_m = float(depth[cy, cx]) / 1000.0
+                if z_m <= 0:
+                    continue
+
+                p_n = cv2.undistortPoints(np.array([[[cx, cy]]], dtype=np.float32), K, D)
+                un, vn = p_n[0][0]
+                pw = (T_world @ np.array([un * z_m, vn * z_m, z_m, 1.0]))[:3]
+                norm = compute_physical_normal(depth, cx, cy, fx, fy, k=15)
+
+                current_frame_dets.append((pw, norm, (cx, cy), binary_masks[i]))
+
+        # 2. 월드 모델 업데이트 (기억 매칭)
+        active_tracks = world_model.update(current_frame_dets)
+
+        # 3. 시각화 (깜빡임 없는 렌더링)
+        vis_img = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
+        for track in active_tracks:
+            avg_pos, avg_norm = track.get_stable_state()
+            cx, cy = track.last_pixel_pos
+            mask = track.last_mask
+
+            # 🔥 LOST 상태에 따라 색상과 투명도 조절
+            is_lost = track.lost_count > 0
+            color_val = (0, 165, 255) if is_lost else (0, 255, 0)  # LOST: 오렌지, Tracking: 녹색
+            alpha = 0.2 if is_lost else 0.4
+
+            # 마스크 렌더링 (가려져도 마지막 마스크를 그림)
+            vis_img[mask == 1] = (
+                vis_img[mask == 1] * (1 - alpha) + np.array(color_val) * alpha
             ).astype(np.uint8)
 
-            # Picking Point 표시
-            cv2.circle(vis_img, (cX, cY), 7, (0, 0, 255), -1)  # 빨간 점
-            cv2.circle(vis_img, (cX, cY), 12, (255, 255, 255), 2)  # 외곽선
-
-            # 정보 텍스트
-            label = f"ID:{obj.id} ({obj.score:.2f})"
+            # UI 표시
+            cv2.circle(vis_img, (cx, cy), 5, (255, 255, 255), -1)
+            label = f"ID:{track.id} {'[LOST]' if is_lost else ''}"
             cv2.putText(
-                vis_img,
-                label,
-                (cX + 15, cY - 15),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2,
+                vis_img, label, (cx + 10, cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color_val, 2
             )
 
-        cv2.imshow("Stable Melon Tracking", vis_img)
-        key = cv2.waitKey(1)
-        if key == ord("q"):
+            # 노멀 벡터 화살표
+            end_p = (int(cx + avg_norm[0] * 60), int(cy + avg_norm[1] * 60))
+            cv2.arrowedLine(vis_img, (cx, cy), end_p, (255, 50, 0), 2)
+
+        cv2.imshow("Zero-Flicker Harvest System", vis_img)
+        if cv2.waitKey(1) == ord("q"):
             break
-        if key == ord("s"):
-            cv2.imwrite(f"tracked_melons_{save_count}.png", vis_img)
-            save_count += 1
 
     camera.stop()
     cv2.destroyAllWindows()
