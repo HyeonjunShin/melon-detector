@@ -4,8 +4,6 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-
-# 사용자 정의 모듈 (환경에 맞춰 경로 확인)
 from camera_devices.kinect_wrapper import KinectCamera
 from model import FastMelonSegmenter
 from scipy.optimize import linear_sum_assignment
